@@ -86,22 +86,34 @@ int px4bl_get_chip_des(px4bl_agent *agent) {
 int px4bl_boot(px4bl_agent *agent) {
 }
 
-/* Higher level operations */
+/* higher level operations */
 int px4bl_agent_connect(px4bl_agent *agent) {
     struct termios conf;
-    
-    /* Set serial configs */
+
     tcgetattr(agent->fd, &conf);
+    /* baud rate */
     cfsetispeed(&conf, agent->baud);
     cfsetospeed(&conf, agent->baud);
     /* no varify */
-    conf->c_cflag &= ~PARENB; 
-    conf->c_cflag &= ~CSTOPB; 
-    conf->c_cflag &= ~CSIZE; 
-    conf->c_cflag |= ~CS8;
+    conf.c_cflag &= ~PARENB;
+    conf.c_cflag &= ~CSTOPB;
+    conf.c_cflag &= ~CSIZE;
+    conf.c_cflag |= ~CS8;
+    /* non-cannonical */
+    conf.c_lflag &= ~(ECHO | ICANON);
+    /* 1 byte as a time, timeout is 10s */
+    conf.c_cc[VMIN] = 1;
+    conf.c_cc[VTIME] = 100;
     tcsetattr(agent->fd, TCANOW, &conf);
-    
-    
+
+    for (int i = 0; i < 20; ++i) {
+      int result;
+      result = write(agent->fd, &PROTO_GET_SYNC, 1);
+      result = write(agent->fd, &PROTO_EOC);
+      tcflush(agent->fd);
+      unsigned char input_byte;
+      result = read(agent->fd, &input_byte, 1);
+    }
 }
 
 typedef struct {
@@ -124,25 +136,25 @@ int main(int argc, char** argv) {
     px4bl_agent agent;
     char *serial_filename;
     int ret = -1;
-    
+
     if (argc != 2) {
         print_usage(argv[0]);
         exit(1);
     }
-    
+
     serial_filename = argv[1];
-    
+
     init_px4bl_agent(&agent);
-    
+
     if (-1 == (agent.fd = open(serial_filename, O_RDWR))) {
         printf("Error: failed to open serial %s\n", serial_filename);
         exit(1);
     }
-    
+
     if (-1 == (ret = px4bl_agent_connect(&agent))) {
         printf("Error: failed to connect to px4 bootloader(%x)", ret);
     }
-    
+
 cleanup:
     deinit_px4bl_agent(&agent);
 
