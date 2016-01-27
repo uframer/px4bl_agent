@@ -1,3 +1,7 @@
+/**
+ * gcc --std=c11 -Wall main.c
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -5,7 +9,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <termios.h>
-
+#include <errno.h>
 
 const unsigned char PROTO_INSYNC = 0X12;
 const unsigned char PROTO_EOC = 0X20;
@@ -32,6 +36,10 @@ const unsigned int DEFAULT_OP_TIMEOUT = 10000; // 10s
 const unsigned int DEFAULT_CONN_TIMEOUT = 120000; // 10s
 const unsigned int CONNECT_RETRY_INTERVAL = 10; // 10ms
 
+const int RESULT_OK = 0;
+const int RESULT_TIMEOUT = -1;
+const int RESULT_ERROR = -2;
+
 typedef struct {
     int fd;
     int conn_timeout;
@@ -54,78 +62,105 @@ void deinit_px4bl_agent(px4bl_agent *agent) {
 
 /* Primitives */
 int px4bl_get_sync(px4bl_agent *agent) {
+  int result = -1;
+  unsigned char input;
+  if ((result = read(agent->fd, &input, 1)) < 0) {
+    int error = errno;
+    perror("read error");
+    printf("result = %d, error = %d\n", result, error);
+    return RESULT_TIMEOUT;
+  }
+  return RESULT_TIMEOUT;
 }
 
 int px4bl_get_device(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_chip_erase(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_prog_multi(px4bl_agent *agent, const unsigned char *data, const unsigned int length) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_crc(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_otp(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_sn(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_chip(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_set_delay(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_get_chip_des(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_boot(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 /* higher level operations */
 int px4bl_agent_connect(px4bl_agent *agent) {
     struct termios conf;
 
-    tcgetattr(agent->fd, &conf);
+    if (-1 == tcgetattr(agent->fd, &conf)) {
+      perror("tcgetattr");
+      return RESULT_ERROR;
+    }
     /* baud rate */
     cfsetispeed(&conf, agent->baud);
     cfsetospeed(&conf, agent->baud);
     /* no varify */
-    conf.c_cflag &= ~PARENB;
-    conf.c_cflag &= ~CSTOPB;
-    conf.c_cflag &= ~CSIZE;
-    conf.c_cflag |= ~CS8;
+    conf.c_cflag &= ~PARENB; // no even/odd varification
+    conf.c_cflag &= ~CSTOPB; // single stop bit
+    conf.c_cflag &= ~CSIZE; // the following two line set CSIZE to CS8
+    conf.c_cflag |= CS8;
     /* non-cannonical */
     conf.c_lflag &= ~(ECHO | ICANON);
-    /* 1 byte as a time, timeout is 10s */
-    conf.c_cc[VMIN] = 1;
-    conf.c_cc[VTIME] = 100;
-    tcsetattr(agent->fd, TCANOW, &conf);
-
-    for (int i = 0; i < 20; ++i) {
-      int result;
-      result = write(agent->fd, &PROTO_GET_SYNC, 1);
-      result = write(agent->fd, &PROTO_EOC);
-      tcflush(agent->fd);
-      unsigned char input_byte;
-      result = read(agent->fd, &input_byte, 1);
+    /* 1 byte at a time, timeout is 10s */
+    conf.c_cc[VMIN] = 0;
+    conf.c_cc[VTIME] = 10; // 10/10 = 1s
+    if (-1 == tcsetattr(agent->fd, TCSANOW, &conf)) {
+      perror("tcsetattr");
+      return RESULT_ERROR;
     }
+
+    for (int i = 0; i < 10; ++i) {
+      printf("Try #%d ...\n", i);
+      if (RESULT_OK == px4bl_get_sync(agent)) {
+        return RESULT_OK;
+      }
+    }
+    return RESULT_ERROR;
 }
 
 typedef struct {
 } px4bl_device_info;
 
 int px4bl_agent_get_info(px4bl_agent *agent, px4bl_device_info* out) {
+  return RESULT_ERROR;
 }
 
 int px4bl_agent_erase(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 int px4bl_agent_flash(px4bl_agent *agent) {
+  return RESULT_ERROR;
 }
 
 void print_usage(const char *prog_name) {
@@ -151,8 +186,8 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    if (-1 == (ret = px4bl_agent_connect(&agent))) {
-        printf("Error: failed to connect to px4 bootloader(%x)", ret);
+    if (RESULT_OK != (ret = px4bl_agent_connect(&agent))) {
+        printf("Error: failed to connect to px4 bootloader (%d)", ret);
     }
 
 cleanup:
